@@ -8,10 +8,13 @@ compiles all lists into one big list, and counts how often a movie appears in th
 AUTHOR: Preston Carlton
 DATE CREATED: Feb 28, 2020
 """
+import os
 from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 from imdb import IMDb
 import string
+import json
+
 # all urls
 imdb_url = "https://www.imdb.com/list/ls055592025/?mode=simple"
 hwood_reporter_url = "https://www.hollywoodreporter.com/lists/100-best-films-ever-hollywood-favorites-818512"
@@ -40,6 +43,44 @@ afi_list = []
 master_list = {}
 
 
+def update_movie_data(data):
+    '''
+    updates the movie's datafile with given 'nary
+    data is formatted like so:
+    {
+        "The Godfather (1972)": {
+            "ranks":{
+                "imdb":1,
+                "empire":2
+            }
+            "ratings":{
+                "imdb":9.3,
+                "tomato_critic":10,
+                "tomato_user":9.8
+            },
+            "gross":248000000
+
+        }
+    }
+
+    '''
+    if not os.path.exists(f'data/movies/{data.keys()[0]}'):
+        # if the movie doesn't already have a datafile, we can create one now
+        with open(f'data/movies/{data.keys()[0]}', 'w') as movie_file:
+            movie_file.write(data)
+        # exit the func so nothing else happens
+        return
+    # if it does exist, we need to update the 'nary
+    with open(f'data/movies/{data.keys()[0]}', 'r') as movie_file:
+        stored_data = movie_file.read(data)
+    # load it into a json 'nary
+    stored_data = json.loads(stored_data)
+    stored_data.update(data)
+    # finally, save the newly-updated data to the datafile
+    with open(f'data/movies/{data.keys()[0]}', 'w') as movie_file:
+        movie_file.write(json.dumps(stored_data))
+
+
 def parse_imdb():
     '''
     parse the imdb_url and save movie titles to imdb_list
@@ -59,7 +100,8 @@ def parse_imdb():
         header_div = content.find(
             'div', attrs={'class', 'col-title'}).find('span')
         # access the div that contains the movie's IMDB rating(not implemented yet)
-        rank_div = content.find('div', attrs={'class', 'col-imdb-rating'})
+        movie_rank = content.find(
+            'div', attrs={'class', 'col-imdb-rating'}).text
         # get all parts in the header_div
         header_elems = header_div.find_all('span')
         # access the movies rank in the list (not implemented yet)
@@ -73,7 +115,19 @@ def parse_imdb():
         movie_year = title_div.find('span').text.strip()
         # add year to the movie title
         display_title = ' '.join([movie_title, movie_year])
-
+        # construct moviedata
+        movie_data = {
+            display_title: {
+                'ranks': {
+                    'imdb': movie_index
+                },
+                'ratings': {
+                    'imdb': movie_rank
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
         # FINALLY, add the movie to the imdb_list
         imdb_list.append(display_title)
 
@@ -96,12 +150,24 @@ def parse_hwood_reporter():
 
         # get the headergroup
         header_div = item.find('header')
+        # grab the movie's rank
+        movie_index = header_div.select('.list-item__index').text
         # the only h1 in this div is the title
         movie_title = header_div.find('h1').text.strip()
         # the only h2 is the year
         movie_year = header_div.find('h2').text.strip()
         # combine year + title to get the full name
         display_title = ' '.join([movie_title, movie_year])
+        # construct moviedata
+        movie_data = {
+            display_title: {
+                'ranks': {
+                    'hollywood_reporter': movie_index
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
         hwood_reporter_list.append(display_title)
 
 
@@ -130,6 +196,16 @@ def parse_empire():
         movie_title = movie_title.strip(movie_year).strip()
         # yes, i realize that i just removed the year from the title. later on, this will (probably) be useful.
         display_title = ' '.join([movie_title, movie_year])
+        # construct moviedata
+        movie_data = {
+            display_title: {
+                'ranks': {
+                    'empire': movie_index
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
         empire_list.append(display_title)
 
 
@@ -160,6 +236,22 @@ def parse_tomatoes():
         # movie_title contains the year in the title, so we need to split that up
         movie_year = display_title.split(' ')[-1].strip()
         movie_title = display_title.strip(movie_year)
+        # construct moviedata
+        movie_data = {
+            display_title: {
+                'ranks': {
+                    'rotten_tomatoes': movie_index
+                },
+                'ratings': {
+                    'rotten_tomatoes': {
+                        'score': movie_rating,
+                        'reviews': num_reviews
+                    }
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
         rt_list.append(display_title)
 
 
@@ -186,6 +278,7 @@ def parse_wiki_gross():
         movie_title = item.find('th').text.strip()
         movie_year = row_parts[3].text.strip()
         display_title = ' '.join([movie_title, f'({movie_year})'])
+
         wiki_gross_list.append(display_title)
 
 
@@ -236,8 +329,10 @@ def parse_binsider():
     page = urlopen(req)
     # convert the page into a bowl of soup
     soup = BeautifulSoup(page, 'html.parser')
-    list_items = soup.select('#l-content > div > div.slide-title.clearfix > h2')
+    list_items = soup.select(
+        '#l-content > div > div.slide-title.clearfix > h2')
     # /html/body/section/section/section/section[3]/section/div/article/section[1]/div/section/div/div/div[2]/div/div[1]/h2
+
 
 def save_lists():
     with open('data/lists/imdb.txt', 'w') as f:
@@ -292,4 +387,3 @@ def main():
 
 if __name__ == "__main__":
     parse_timeout_actors()
-    
