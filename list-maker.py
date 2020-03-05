@@ -9,11 +9,13 @@ AUTHOR: Preston Carlton
 DATE CREATED: Feb 28, 2020
 """
 import os
+import re
 from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 from imdb import IMDb
-import string
+from string import capwords
 import json
+import collections.abc
 
 # all urls
 imdb_url = "https://www.imdb.com/list/ls055592025/?mode=simple"
@@ -24,12 +26,9 @@ wiki_gross_url = "https://en.wikipedia.org/wiki/List_of_highest-grossing_films"
 afi_url = "https://www.afi.com/afis-100-years-100-movies/"
 timeout_url = "https://www.timeout.com/newyork/movies/best-movies-of-all-time"
 timeout_actors_url = "https://www.timeout.com/newyork/movies/100-best-movies-as-chosen-by-actors"
-
-msn_url = "https://www.msn.com/en-us/movies/gallery/100-best-movies-of-all-time/ar-AAAkjKL"
 binsider_url = "https://www.businessinsider.com/50-best-movies-all-time-critics-2016-10"
 ranker_url = "https://www.ranker.com/crowdranked-list/the-best-movies-of-all-time"
 goodmovies_url = "https://goodmovieslist.com/best-movies/best-250-movies.html"
-
 
 # lists to contain all movie titles
 imdb_list = []
@@ -38,9 +37,43 @@ empire_list = []
 rt_list = []
 wiki_gross_list = []
 afi_list = []
+timeout_list = []
+timeout_actors_list = []
+binsider_list = []
+ranker_list = []
+goodmovies_list = []
+
+# illegal chars list for filenames
+illegal_chars = [
+    '!',
+    ',',
+    '-',
+    '&',
+    '?',
+    '/',
+    '\\',
+    "'",
+    ':',
+    '.',
+    '—',
+    '·'
+]
 
 # nary to contain all the information about the movies
 master_list = {}
+
+
+
+def update(orig, new):
+    '''
+    helper function to assist in updating nested dictionaries
+    '''
+    for k, v in new.items():
+        if isinstance(v, collections.abc.Mapping):
+            orig[k] = update(orig.get(k, {}), v)
+        else:
+            orig[k] = v
+    return orig
 
 
 def update_movie_data(data):
@@ -54,9 +87,14 @@ def update_movie_data(data):
                 "empire":2
             }
             "ratings":{
-                "imdb":9.3,
-                "tomato_critic":10,
-                "tomato_user":9.8
+                "imdb":{
+                    "score":9.3,
+                    "reviews":13
+                },
+                "rotten_tomatoes":{
+                    "score":10,
+                    "reviews":10365
+                }
             },
             "gross":248000000
 
@@ -64,20 +102,34 @@ def update_movie_data(data):
     }
 
     '''
-    if not os.path.exists(f'data/movies/{data.keys()[0]}'):
+    # get the filename of the movie
+    movie_title = list(data.keys())[0]
+    # remove all bad chars
+    filename = movie_title.translate({ord(c): None for c in illegal_chars})
+    # replace all the double spaces
+    filename = filename.replace('  ', ' ')
+    filename = filename.replace(' ', '_')
+    filename = filename.lower() + '.json'
+
+    if not os.path.exists(f'data/movies/{filename}'):
         # if the movie doesn't already have a datafile, we can create one now
-        with open(f'data/movies/{data.keys()[0]}', 'w') as movie_file:
-            movie_file.write(data)
+        with open(f'data/movies/{filename}', 'w') as movie_file:
+            movie_file.write(json.dumps(data))
         # exit the func so nothing else happens
         return
     # if it does exist, we need to update the 'nary
-    with open(f'data/movies/{data.keys()[0]}', 'r') as movie_file:
-        stored_data = movie_file.read(data)
+    with open(f'data/movies/{filename}', 'r') as movie_file:
+        stored_data = movie_file.read()
     # load it into a json 'nary
+
     stored_data = json.loads(stored_data)
-    stored_data.update(data)
+    # here we need to access the first item in the 'nary rather than
+    # just overwriting the whole thing. this way, we can account for naming
+    # discrepancies
+
+    update(stored_data,data)
     # finally, save the newly-updated data to the datafile
-    with open(f'data/movies/{data.keys()[0]}', 'w') as movie_file:
+    with open(f'data/movies/{filename}', 'w') as movie_file:
         movie_file.write(json.dumps(stored_data))
 
 
@@ -99,14 +151,26 @@ def parse_imdb():
         # access the div that contains the title
         header_div = content.find(
             'div', attrs={'class', 'col-title'}).find('span')
-        # access the div that contains the movie's IMDB rating(not implemented yet)
-        movie_rank = content.find(
-            'div', attrs={'class', 'col-imdb-rating'}).text
+        # access the div that contains the movie's IMDB rating
+        rating_div = content.select_one('.col-imdb-rating')
+        movie_rating = rating_div.text.strip()
+        # convert rating into a float
+        movie_rating = float(movie_rating)
+        # access the number of ratings
+        num_reviews = rating_div.select_one('strong')['title']
+        # at this point, num_reviews is formatted like this:
+        # 9.2 base on 1,512,511 votes
+        # we need to extract the 1,512,511
+        num_reviews = num_reviews.replace(str(movie_rating),'')
+
+        # base on 1,512,511
+        num_reviews = re.findall(r'(?:^|\s)(\d*\.?\d+|\d{1,3}(?:,\d{3})*(?:\.\d+)?)(?!\S)',num_reviews)[0]
+        num_reviews = int(num_reviews.replace(',',''))
+
         # get all parts in the header_div
         header_elems = header_div.find_all('span')
-        # access the movies rank in the list (not implemented yet)
-        # movie_index = header_div.find('span',attrs={'class','lister-item-index'})
-        movie_index = header_elems[0]
+        # access the movies rank in the list, convert to int, and strip the trailing .
+        movie_index = int(header_elems[0].text.strip('.'))
         # finally, get the movie's title (just kidding, this is ANOTHER WRAPPER)
         title_div = header_elems[1]
         # there's two elements in this; the movie's title and the year it was released. we want both.
@@ -122,9 +186,12 @@ def parse_imdb():
                     'imdb': movie_index
                 },
                 'ratings': {
-                    'imdb': movie_rank
+                    'imdb': {
+                        'score': movie_rating,
+                        'reviews': num_reviews
                 }
             }
+        }
         }
         # update the movie data
         update_movie_data(movie_data)
@@ -151,7 +218,8 @@ def parse_hwood_reporter():
         # get the headergroup
         header_div = item.find('header')
         # grab the movie's rank
-        movie_index = header_div.select('.list-item__index').text
+        movie_index = header_div.select_one('.list-item__index').text
+        movie_index = int(movie_index)
         # the only h1 in this div is the title
         movie_title = header_div.find('h1').text.strip()
         # the only h2 is the year
@@ -162,7 +230,7 @@ def parse_hwood_reporter():
         movie_data = {
             display_title: {
                 'ranks': {
-                    'hollywood_reporter': movie_index
+                    'hollywood_reporter': int(movie_index)
                 }
             }
         }
@@ -200,7 +268,7 @@ def parse_empire():
         movie_data = {
             display_title: {
                 'ranks': {
-                    'empire': movie_index
+                    'empire': int(movie_index)
                 }
             }
         }
@@ -228,11 +296,13 @@ def parse_tomatoes():
         if len(row_parts) < 4:
             continue
         # grab the index
-        movie_index = row_parts[0].text
-        movie_rating = row_parts[1].text
+        movie_index = row_parts[0].text.strip('.')
+        # we need to convert this from a percentage to a decimal
+        movie_rating = row_parts[1].text.strip().replace('%','')
+        movie_rating = int(movie_rating)/10
         # this is already formatted how we want to display it
         display_title = row_parts[2].text.strip()
-        num_reviews = row_parts[3].text
+        num_reviews = int(row_parts[3].text)
         # movie_title contains the year in the title, so we need to split that up
         movie_year = display_title.split(' ')[-1].strip()
         movie_title = display_title.strip(movie_year)
@@ -240,7 +310,7 @@ def parse_tomatoes():
         movie_data = {
             display_title: {
                 'ranks': {
-                    'rotten_tomatoes': movie_index
+                    'rotten_tomatoes': int(movie_index)
                 },
                 'ratings': {
                     'rotten_tomatoes': {
@@ -279,7 +349,7 @@ def parse_wiki_gross():
         movie_year = row_parts[3].text.strip()
         display_title = ' '.join([movie_title, f'({movie_year})'])
 
-        wiki_gross_list.append(display_title)
+        wiki_gross_list.append(capwords(display_title))
 
 
 def parse_afi():
@@ -291,10 +361,20 @@ def parse_afi():
     list_items = soup.select('label.container > h6.q_title')
     for item in list_items:
         # the title is formatted as such: "1. CITIZEN KANE (1941)" so we have to parse it
-
         movie_index = item.text.split('.')[0]
-        movie_name = '.'.join(item.text.split('.')[1:]).strip()
-        afi_list.append(string.capwords(movie_name))
+        movie_title = '.'.join(item.text.split('.')[1:]).strip()
+        # currently, i feel like the title is yelling at me. that makes me uncomfortable
+        movie_title = capwords(movie_title)
+        movie_data = {
+            movie_title: {
+                'ranks': {
+                    'afi': int(movie_index)
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
+        afi_list.append(capwords(movie_title))
 
 
 def parse_timeout():
@@ -306,8 +386,19 @@ def parse_timeout():
     list_items = soup.select(
         '#content > article > div > div > div > div > div > article > div.card-content > header > h3 > a')
 
-    for item in list_items[:-1]:
-        print(item.text.strip())
+    for index, item in enumerate(list_items[:-1]):
+        movie_title = item.text.strip()
+        movie_data = {
+            movie_title: {
+                'ranks': {
+                    'timeout': index+1
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
+        # add that bad boi to the list
+        timeout_list.append(capwords(movie_title))
 
 
 def parse_timeout_actors():
@@ -319,19 +410,112 @@ def parse_timeout_actors():
     list_items = soup.select(
         '#content > article > div > div > div > div > div > article > div.card-content > header > h3 > a')
 
-    for item in list_items[:-1]:
-        print(item.text.strip())
+    for index, item in enumerate(list_items[:-1]):
+        movie_title = item.text.strip()
+        movie_data = {
+            movie_title: {
+                'ranks': {
+                    'timeout_actors': index+1
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
+        # add the movie to its list
+        timeout_actors_list.append(capwords(movie_title))
 
 
 def parse_binsider():
     hdr = {'User-Agent': 'Mozilla/5.0'}
-    req = Request(timeout_actors_url, headers=hdr)
+    req = Request(binsider_url, headers=hdr)
     page = urlopen(req)
     # convert the page into a bowl of soup
     soup = BeautifulSoup(page, 'html.parser')
-    list_items = soup.select(
-        '#l-content > div > div.slide-title.clearfix > h2')
-    # /html/body/section/section/section/section[3]/section/div/article/section[1]/div/section/div/div/div[2]/div/div[1]/h2
+    list_items = soup.select('h2.slide-title-text')
+
+    for item in list_items:
+        # each item is formatted as such:
+        # 1. "Citizen Kane" (1941)
+        # strip the quotes and all whitespace
+        item_text = item.text.strip()
+        movie_index = item_text.split('.')[0]
+        movie_title = item_text.strip(f'{movie_index}. ').replace('"', '')
+        # construct data
+        movie_data = {
+            movie_title: {
+                'ranks': {
+                    'business_insider': int(movie_index)
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
+        binsider_list.append(movie_title)
+
+
+def parse_ranker():
+    hdr = {'User-Agent': 'Mozilla/5.0'}
+    req = Request(ranker_url, headers=hdr)
+    page = urlopen(req)
+    # convert the page into a bowl of soup
+    soup = BeautifulSoup(page, 'html.parser')
+    # this one's fun. there's a lot going on in each of the list items,
+    # so we're going to have parse every element out separately.
+
+    # first, select all the containers
+    list_items = soup.select('.listItem.listItem__h2')
+
+    for item in list_items:
+        movie_index = item.select_one('.listItem__rank').text.strip()
+        movie_title = item.select_one('.listItem__title').text.strip()
+        # now try to find the year of the movie (embedded ONLY in the description)
+        movie_desc = item.select_one('.listItem__properties').text.strip()
+        # use some fancy regex to select the year
+        movie_year = re.findall(r'(\([12]\d{3}\))', movie_desc)[0]
+        # sometimes, they decide to throw the year of production into the title
+        # (because why not), so we need to account for that when adding the year ourselves.
+        movie_title = movie_title.strip(movie_year)
+        movie_title = ' '.join([movie_title, movie_year])
+        # finally, save all the movie's data and append it to the list for the site
+        movie_data = {
+            movie_title: {
+                'ranks': {
+                    'ranker': movie_index
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
+        ranker_list.append(movie_title)
+
+
+def parse_goodmovies():
+    hdr = {'User-Agent': 'Mozilla/5.0'}
+    req = Request(goodmovies_url, headers=hdr)
+    page = urlopen(req)
+    # convert the page into a bowl of soup
+    soup = BeautifulSoup(page, 'html.parser')
+    list_items = soup.select('p.list_movie_name')
+    for index, item in enumerate(list_items):
+        # the movie index is stored in plaintext inside item,
+        # so we're going to just grab it from enumerate() instead
+        movie_title = item.select_one('.list_movie_localized_name').text
+        movie_year = item.find(
+            'span', attrs={'itemprop': 'datePublished'}).text
+        display_title = f'{movie_title} ({movie_year})'
+        # construct the data 'nary
+        # finally, save all the movie's data and append it to the list for the site
+        movie_data = {
+            display_title: {
+                'ranks': {
+                    'goodmovies': index+1
+                }
+            }
+        }
+        # update the movie data
+        update_movie_data(movie_data)
+        # append it to the list
+        goodmovies_list.append(display_title)
 
 
 def save_lists():
@@ -386,4 +570,4 @@ def main():
 
 
 if __name__ == "__main__":
-    parse_timeout_actors()
+    parse_imdb()
